@@ -1,0 +1,1147 @@
+import React, { useMemo, useState } from "react";
+
+type Chauffage = "Gaz" | "Fioul" | "Électricité" | "Granulés";
+type Alimentation = "Monophasé" | "Triphasé";
+type Emetteurs = "Radiateurs" | "Plancher chauffant";
+type TypeRadiateurs = "Fonte" | "Aluminium" | "Inconnu";
+type Frequence = "€/mois" | "€/an";
+type ProfilAides = "Très modestes" | "Modestes" | "Violet" | "Classique";
+
+const BRAND = {
+  name: "Easy Energies",
+  phone: "01 87 46 00 56",
+  address: "20 Rue Magellan, 94370 Sucy-en-Brie",
+  siret: "85308237800029",
+};
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function eur(n: number) {
+  const v = Number.isFinite(n) ? n : 0;
+  return new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(v);
+}
+
+function monthlyPayment(pv: number, taeg: number, months: number) {
+  const r = taeg / 12;
+  if (months <= 0) return 0;
+  if (r <= 0) return pv / months;
+  const denom = 1 - Math.pow(1 + r, -months);
+  return (pv * r) / denom;
+}
+
+function formatDurationMonths(m: number) {
+  const years = Math.floor(m / 12);
+  const months = m % 12;
+  if (years <= 0) return `${months} mois`;
+  if (months === 0) return `${years} an${years > 1 ? "s" : ""}`;
+  return `${years} an${years > 1 ? "s" : ""} et ${months} mois`;
+}
+
+function Card({
+  children,
+  tone = "neutral",
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "orange" | "green" | "blue" | "red" | "dark";
+}) {
+  const tones: Record<string, { bg: string; bd: string; shadow: string; color?: string }> = {
+    neutral: { bg: "rgba(255,255,255,.94)", bd: "rgba(15,23,42,.10)", shadow: "0 18px 40px rgba(2,6,23,.08)" },
+    orange: { bg: "rgba(255,247,237,.94)", bd: "rgba(245,158,11,.28)", shadow: "0 18px 44px rgba(245,158,11,.10)" },
+    green: { bg: "rgba(240,253,244,.94)", bd: "rgba(34,197,94,.26)", shadow: "0 18px 44px rgba(34,197,94,.10)" },
+    blue: { bg: "rgba(239,246,255,.94)", bd: "rgba(37,99,235,.22)", shadow: "0 18px 44px rgba(37,99,235,.10)" },
+    red: { bg: "rgba(254,242,242,.94)", bd: "rgba(239,68,68,.22)", shadow: "0 18px 44px rgba(239,68,68,.10)" },
+    dark: { bg: "rgba(2,6,23,.92)", bd: "rgba(255,255,255,.14)", shadow: "0 18px 60px rgba(2,6,23,.28)", color: "white" },
+  };
+  const t = tones[tone] ?? tones.neutral;
+
+  return (
+    <div
+      style={{
+        background: t.bg,
+        border: `1px solid ${t.bd}`,
+        borderRadius: 18,
+        padding: 16,
+        boxShadow: t.shadow,
+        color: t.color ?? "#0f172a",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Badge({
+  children,
+  tone = "blue",
+}: {
+  children: React.ReactNode;
+  tone?: "orange" | "green" | "blue" | "neutral" | "red";
+}) {
+  const styles: Record<string, React.CSSProperties> = {
+    orange: { background: "rgba(255,237,213,.92)", borderColor: "rgba(245,158,11,.35)", color: "#7a4a00" },
+    green: { background: "rgba(220,252,231,.92)", borderColor: "rgba(34,197,94,.35)", color: "#14532d" },
+    blue: { background: "rgba(219,234,254,.92)", borderColor: "rgba(37,99,235,.35)", color: "#1e3a8a" },
+    neutral: { background: "rgba(241,245,249,.92)", borderColor: "rgba(15,23,42,.14)", color: "#0f172a" },
+    red: { background: "rgba(254,226,226,.92)", borderColor: "rgba(239,68,68,.25)", color: "#7f1d1d" },
+  };
+  const s = styles[tone] ?? styles.blue;
+
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 10px",
+        borderRadius: 999,
+        border: `1px solid ${String(s.borderColor)}`,
+        background: String(s.background),
+        color: String(s.color),
+        fontSize: 12,
+        fontWeight: 900,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return <div style={{ fontSize: 12, color: "#475569", marginBottom: 6, fontWeight: 800 }}>{children}</div>;
+}
+
+function Input({
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+}: {
+  value: string | number;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  type?: string;
+}) {
+  return (
+    <input
+      value={String(value)}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      type={type}
+      style={{
+        width: "100%",
+        padding: "10px 12px",
+        borderRadius: 12,
+        border: "1px solid rgba(15,23,42,.16)",
+        outline: "none",
+        fontSize: 14,
+        background: "rgba(255,255,255,.96)",
+      }}
+    />
+  );
+}
+
+function Select({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      style={{
+        width: "100%",
+        padding: "10px 12px",
+        borderRadius: 12,
+        border: "1px solid rgba(15,23,42,.16)",
+        outline: "none",
+        fontSize: 14,
+        background: "rgba(255,255,255,.96)",
+      }}
+    >
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function ProgressDots({ total, current }: { total: number; current: number }) {
+  return (
+    <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center" }}>
+      {Array.from({ length: total }).map((_, i) => {
+        const active = i === current;
+        const near = Math.abs(i - current) <= 1;
+        return (
+          <div
+            key={i}
+            style={{
+              width: active ? 18 : near ? 10 : 8,
+              height: 8,
+              borderRadius: 999,
+              background: active
+                ? "linear-gradient(90deg,#f59e0b,#2563eb,#22c55e)"
+                : "rgba(15,23,42,.18)",
+              transition: "all .2s ease",
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function Title({ kicker, title, sub }: { kicker?: string; title: string; sub?: string }) {
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <Badge tone="neutral">{kicker ?? BRAND.name}</Badge>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <Badge tone="blue">{BRAND.phone}</Badge>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 28, fontWeight: 980, letterSpacing: "-0.02em", color: "#0f172a" }}>{title}</div>
+      {sub ? <div style={{ color: "#475569", fontSize: 14, lineHeight: 1.45 }}>{sub}</div> : null}
+    </div>
+  );
+}
+
+function StepWrap({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ padding: 18 }}>
+      <div style={{ display: "grid", gap: 12 }}>{children}</div>
+    </div>
+  );
+}
+
+export default function App() {
+  // -----------------------------
+  // 0) “Enregistrement” (avant la simulation)
+  // -----------------------------
+  const [mode, setMode] = useState<"enregistrement" | "simulation">("enregistrement");
+
+  const [clientNom, setClientNom] = useState("");
+  const [clientAdresse, setClientAdresse] = useState("");
+  const [surface, setSurface] = useState<number>(100);
+
+  const [chauffage, setChauffage] = useState<Chauffage>("Gaz");
+  const [alimentation, setAlimentation] = useState<Alimentation>("Monophasé");
+  const [emetteurs, setEmetteurs] = useState<Emetteurs>("Radiateurs");
+  const [typeRadiateurs, setTypeRadiateurs] = useState<TypeRadiateurs>("Fonte");
+
+  const [depenseFreq, setDepenseFreq] = useState<Frequence>("€/mois");
+  const [depenseMontant, setDepenseMontant] = useState<number>(150);
+
+  const [profilAides, setProfilAides] = useState<ProfilAides>("Modestes");
+
+  // Option “remplacement complet” (texte uniquement)
+  const [remplacementComplet, setRemplacementComplet] = useState<boolean>(true);
+
+  // -----------------------------
+  // 1) Règles / constantes
+  // -----------------------------
+  const PRIX_BASE_TTC = 22900; // fixe, PAC + BTD inclus
+  const TAUX_TAEG = 0.0498; // 4,98%
+  const DUREE_MOIS = 180;
+  const REPORT_MOIS = 6;
+
+  // Surcharges invisibles (intégrées au calcul)
+  const surchargeInvisible = useMemo(() => {
+    const sTri = alimentation === "Triphasé" ? 500 : 0;
+    const sPlancher = emetteurs === "Plancher chauffant" ? 1000 : 0;
+    return sTri + sPlancher;
+  }, [alimentation, emetteurs]);
+
+  // Aides : CEE fixe + MPR selon profil
+  const aides = useMemo(() => {
+    const ceePac = 4400;
+    const ceeBtd = 100;
+    const ceeTotal = ceePac + ceeBtd; // 4500
+
+    const mprMap: Record<ProfilAides, { pac: number; btd: number }> = {
+      "Très modestes": { pac: 5000, btd: 1200 },
+      Modestes: { pac: 4000, btd: 800 },
+      Violet: { pac: 3500, btd: 400 },
+      Classique: { pac: 0, btd: 0 },
+    };
+
+    const mpr = mprMap[profilAides];
+    const mprTotal = mpr.pac + mpr.btd;
+
+    return {
+      ceePac,
+      ceeBtd,
+      ceeTotal,
+      mprPac: mpr.pac,
+      mprBtd: mpr.btd,
+      mprTotal,
+      total: ceeTotal + mprTotal,
+    };
+  }, [profilAides]);
+
+  // Dépense mensuelle
+  const depenseMensuelle = useMemo(() => {
+    if (depenseFreq === "€/mois") return depenseMontant;
+    return depenseMontant / 12;
+  }, [depenseFreq, depenseMontant]);
+
+  // Pack recommandé 9/11/14/16 (logique simple et stable)
+  const packRecommande = useMemo(() => {
+    // base sur surface
+    let base = surface <= 75 ? 9 : surface <= 110 ? 11 : surface <= 145 ? 14 : 16;
+
+    // petits ajustements
+    if (chauffage === "Fioul") base = Math.min(16, base + (base === 9 ? 2 : 3)); // pousse vers 11/14/16
+    if (typeRadiateurs === "Fonte") base = Math.min(16, base === 9 ? 11 : base === 11 ? 14 : base);
+
+    // normalisation sur les valeurs possibles
+    if (base <= 9) return 9;
+    if (base <= 11) return 11;
+    if (base <= 14) return 14;
+    return 16;
+  }, [surface, chauffage, typeRadiateurs]);
+
+  const systemeReco = "Pompe à chaleur Air/Eau + Ballon thermodynamique";
+
+  // Prix calculé (avec surcharges invisibles)
+  const prixCalculeTTC = useMemo(() => PRIX_BASE_TTC + surchargeInvisible, [surchargeInvisible]);
+
+  // ✅ Ajustements conseillers (visibles)
+  const [overridePrixTTC, setOverridePrixTTC] = useState<number>(0); // 0 => pas d’override
+  const [overrideMensualite, setOverrideMensualite] = useState<number>(0); // 0 => pas d’override
+
+  const coutTTC = useMemo(() => {
+    return overridePrixTTC > 0 ? overridePrixTTC : prixCalculeTTC;
+  }, [overridePrixTTC, prixCalculeTTC]);
+
+  const coutApresAides = useMemo(() => Math.max(0, coutTTC - aides.total), [coutTTC, aides.total]);
+
+  const mensualiteCalculee = useMemo(() => monthlyPayment(coutApresAides, TAUX_TAEG, DUREE_MOIS), [coutApresAides]);
+  const mensualite = useMemo(() => (overrideMensualite > 0 ? overrideMensualite : mensualiteCalculee), [overrideMensualite, mensualiteCalculee]);
+
+  // “Avant aides” (pour afficher “avant → après”)
+  const mensualiteAvantAides = useMemo(() => monthlyPayment(coutTTC, TAUX_TAEG, DUREE_MOIS), [coutTTC]);
+
+  // Economies estimatives (simple)
+  const [savingsPct, setSavingsPct] = useState<number>(30);
+  const economieMensuelleEstimee = useMemo(() => depenseMensuelle * (clamp(savingsPct, 0, 80) / 100), [depenseMensuelle, savingsPct]);
+
+  const amortissementMois = useMemo(() => {
+    if (economieMensuelleEstimee <= 0) return null;
+    return coutApresAides / economieMensuelleEstimee;
+  }, [coutApresAides, economieMensuelleEstimee]);
+
+  // -----------------------------
+  // 2) Slides / Simulation
+  // -----------------------------
+  const slides = useMemo(() => {
+    const amortTxt = amortissementMois ? formatDurationMonths(Math.round(amortissementMois)) : "—";
+
+    // “reste énergie” pendant report (simplifié)
+    const restePendantReport = 0; // si tu veux mettre un chiffre fixe type 41€, mets-le ici
+    const cagnotte = economieMensuelleEstimee * REPORT_MOIS;
+
+    const badgesTop = (
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <Badge tone="neutral">{BRAND.name}</Badge>
+        <Badge tone="blue">{BRAND.phone}</Badge>
+        <Badge tone="green">Pack recommandé : {packRecommande} kW</Badge>
+      </div>
+    );
+
+    return [
+      // 1) Cover
+      <StepWrap key="s1">
+        <Title title="Étude Pompe à chaleur personnalisée" sub={`Préparée pour ${clientNom || "—"} · ${clientAdresse || "—"}`} />
+        <Card tone="neutral">
+          <div style={{ display: "grid", gap: 12, justifyItems: "center", textAlign: "center" }}>
+            <div style={{ width: 56, height: 56, borderRadius: 999, background: "rgba(245,158,11,.16)", display: "grid", placeItems: "center" }}>
+              <div style={{ fontSize: 24 }}>☀️</div>
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 950 }}>{systemeReco}</div>
+            <div style={{ color: "#475569" }}>
+              Installation complète (chauffage + eau chaude) · Aides intégrées · Financement 180 mois
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+              <Badge tone="neutral">SIRET : {BRAND.siret}</Badge>
+              <Badge tone="green">{BRAND.address}</Badge>
+            </div>
+          </div>
+        </Card>
+      </StepWrap>,
+
+      // 2) Prix énergie augmente
+      <StepWrap key="s2">
+        {badgesTop}
+        <Title kicker="Contexte" title="L’énergie : une hausse continue" sub="Même à consommation identique, la facture a tendance à augmenter dans le temps." />
+        <Card tone="red">
+          <div style={{ fontWeight: 950, fontSize: 16, color: "#7f1d1d" }}>Pourquoi ça augmente ?</div>
+          <div style={{ marginTop: 10, color: "#475569", lineHeight: 1.5 }}>
+            Marchés & volatilité · Coûts d’acheminement · Fiscalité · Contraintes d’approvisionnement.
+          </div>
+        </Card>
+        <Card tone="neutral">
+          <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr 1fr" as any }}>
+            <Card tone="red">
+              <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Aujourd’hui</div>
+              <div style={{ fontSize: 26, fontWeight: 980, marginTop: 4 }}>{eur(depenseMensuelle)}/mois</div>
+            </Card>
+            <Card tone="red">
+              <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Dans 10 ans (illustration)</div>
+              <div style={{ fontSize: 26, fontWeight: 980, marginTop: 4 }}>{eur(depenseMensuelle * 1.45)}/mois</div>
+            </Card>
+            <Card tone="red">
+              <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Dans 25 ans (illustration)</div>
+              <div style={{ fontSize: 26, fontWeight: 980, marginTop: 4 }}>{eur(depenseMensuelle * 2.6)}/mois</div>
+            </Card>
+          </div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "#475569" }}>
+            *Estimation illustrative (objectif : visualiser la tendance).
+          </div>
+        </Card>
+      </StepWrap>,
+
+      // 3) Situation
+      <StepWrap key="s3">
+        {badgesTop}
+        <Title kicker="Votre situation" title="Votre situation personnelle" sub="Ce que vous payez actuellement (base de calcul)." />
+        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" as any }}>
+          <Card tone="neutral">
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ fontWeight: 950 }}>Logement</div>
+              <div style={{ color: "#475569" }}>Surface : <b>{surface} m²</b></div>
+              <div style={{ color: "#475569" }}>Chauffage actuel : <b>{chauffage}</b></div>
+              <div style={{ color: "#475569" }}>Émetteurs : <b>{emetteurs}</b> · Radiateurs : <b>{typeRadiateurs}</b></div>
+              <div style={{ color: "#475569" }}>Alimentation : <b>{alimentation}</b></div>
+            </div>
+          </Card>
+          <Card tone="orange">
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ fontWeight: 950, color: "#7a4a00" }}>Budget énergie</div>
+              <div style={{ fontSize: 34, fontWeight: 980 }}>{eur(depenseMensuelle)}/mois</div>
+              <div style={{ color: "#475569" }}>
+                Base utilisée pour estimer économies et amortissement.
+              </div>
+            </div>
+          </Card>
+        </div>
+      </StepWrap>,
+
+      // 4) Solution
+      <StepWrap key="s4">
+        {badgesTop}
+        <Title kicker="Solution" title="La solution : Pompe à chaleur Air/Eau" sub="Chauffage + Eau chaude sanitaire (ballon thermodynamique inclus)." />
+        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr 1fr" as any }}>
+          <Card tone="green">
+            <div style={{ fontWeight: 980 }}>Économies</div>
+            <div style={{ marginTop: 8, color: "#475569" }}>Réduction de la dépense par rapport à gaz/fioul.</div>
+          </Card>
+          <Card tone="blue">
+            <div style={{ fontWeight: 980 }}>Protection prix</div>
+            <div style={{ marginTop: 8, color: "#475569" }}>Moins dépendant des hausses fortes.</div>
+          </Card>
+          <Card tone="orange">
+            <div style={{ fontWeight: 980 }}>Valorisation</div>
+            <div style={{ marginTop: 8, color: "#475569" }}>Modernisation + confort.</div>
+          </Card>
+        </div>
+      </StepWrap>,
+
+      // 5) Recommandation pack
+      <StepWrap key="s5">
+        {badgesTop}
+        <Title kicker="Recommandation" title="Notre recommandation" sub="Dimensionnement simple et lisible." />
+        <Card tone="green">
+          <div style={{ display: "grid", gap: 10, justifyItems: "center", textAlign: "center" }}>
+            <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Nous vous recommandons</div>
+            <div style={{ fontSize: 54, fontWeight: 980, color: "#14532d" }}>{packRecommande} kW</div>
+            <div style={{ color: "#475569", fontWeight: 900 }}>{systemeReco}</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center", marginTop: 6 }}>
+              <Badge tone="green">Adapté à {surface} m²</Badge>
+              <Badge tone="blue">Aides intégrées</Badge>
+              <Badge tone="orange">Report 6 mois</Badge>
+            </div>
+          </div>
+        </Card>
+
+        <Card tone="neutral">
+          <div style={{ fontWeight: 950 }}>Pourquoi cette puissance ?</div>
+          <div style={{ marginTop: 10, color: "#475569", lineHeight: 1.5 }}>
+            Surface, type d’émetteurs, énergie actuelle et radiateurs (fonte/aluminium) influencent le dimensionnement.
+          </div>
+        </Card>
+      </StepWrap>,
+
+      // 6) Investissement (prix avant aides) + ajustements conseillers
+      <StepWrap key="s6">
+        {badgesTop}
+        <Title kicker="Financement" title="Votre investissement" sub="Prix installation (avant aides) + possibilité d’ajuster si nécessaire." />
+        <Card tone="orange">
+          <div style={{ display: "grid", gap: 10, justifyItems: "center", textAlign: "center" }}>
+            <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Prix installation (avant aides)</div>
+            <div style={{ fontSize: 42, fontWeight: 980, color: "#7a4a00" }}>{eur(coutTTC)}</div>
+            <div style={{ color: "#475569", fontWeight: 900 }}>Mensualité sur ce montant (indicatif)</div>
+            <div style={{ fontSize: 28, fontWeight: 980, color: "#7a4a00" }}>{eur(mensualiteAvantAides)}/mois</div>
+            <div style={{ fontSize: 12, color: "#475569" }}>sur {DUREE_MOIS} mois ({formatDurationMonths(DUREE_MOIS)})</div>
+          </div>
+        </Card>
+
+        <Card tone="neutral">
+          <div style={{ fontWeight: 950 }}>Ajustements (conseiller)</div>
+          <div style={{ marginTop: 10, color: "#475569", fontSize: 13, lineHeight: 1.5 }}>
+            Si vous avez vendu plus cher / moins cher, ou si vous souhaitez afficher une mensualité spécifique.
+          </div>
+
+          <div style={{ marginTop: 12, display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" as any }}>
+            <div>
+              <Label>Prix TTC (laisser vide = calcul automatique)</Label>
+              <Input
+                value={overridePrixTTC > 0 ? overridePrixTTC : ""}
+                onChange={(v) => {
+                  const n = parseInt(v || "0", 10) || 0;
+                  setOverridePrixTTC(clamp(n, 0, 999999));
+                }}
+                placeholder={`Auto : ${eur(prixCalculeTTC)}`}
+                type="number"
+              />
+            </div>
+
+            <div>
+              <Label>Mensualité après aides (laisser vide = calcul automatique)</Label>
+              <Input
+                value={overrideMensualite > 0 ? overrideMensualite : ""}
+                onChange={(v) => {
+                  const n = parseInt(v || "0", 10) || 0;
+                  setOverrideMensualite(clamp(n, 0, 99999));
+                }}
+                placeholder={`Auto : ${eur(mensualiteCalculee)}`}
+                type="number"
+              />
+            </div>
+          </div>
+
+          <div style={{ marginTop: 10, fontSize: 12, color: "#475569" }}>
+            Remarque : les surcoûts “triphasé / plancher chauffant” sont intégrés automatiquement dans le calcul si aucun override n’est saisi.
+          </div>
+        </Card>
+      </StepWrap>,
+
+      // 7) Aides
+      <StepWrap key="s7">
+        {badgesTop}
+        <Title kicker="Aides" title="Vos droits aux aides" sub="CEE + MaPrimeRénov’ (estimation)." />
+        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" as any }}>
+          <Card tone="green">
+            <div style={{ fontWeight: 950, color: "#14532d" }}>CEE (fixe)</div>
+            <div style={{ marginTop: 10, display: "grid", gap: 8, color: "#475569" }}>
+              <div>• PAC : <b>{eur(aides.ceePac)}</b></div>
+              <div>• Ballon : <b>{eur(aides.ceeBtd)}</b></div>
+              <div style={{ marginTop: 8, fontWeight: 950 }}>Total CEE : {eur(aides.ceeTotal)}</div>
+            </div>
+          </Card>
+
+          <Card tone="blue">
+            <div style={{ fontWeight: 950, color: "#1e3a8a" }}>MaPrimeRénov’</div>
+            <div style={{ marginTop: 10, display: "grid", gap: 8, color: "#475569" }}>
+              <div>• PAC : <b>{eur(aides.mprPac)}</b></div>
+              <div>• Ballon : <b>{eur(aides.mprBtd)}</b></div>
+              <div style={{ marginTop: 8, fontWeight: 950 }}>Total MPR : {eur(aides.mprTotal)}</div>
+            </div>
+          </Card>
+        </div>
+
+        <Card tone="orange">
+          <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Total de vos aides</div>
+          <div style={{ fontSize: 40, fontWeight: 980, marginTop: 6, color: "#7a4a00" }}>{eur(aides.total)}</div>
+
+          <div style={{ marginTop: 10, display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr 1fr" as any }}>
+            <div style={{ color: "#475569" }}>
+              Prix TTC initial<br />
+              <b>{eur(coutTTC)}</b>
+            </div>
+            <div style={{ color: "#475569" }}>
+              Aides déduites<br />
+              <b>- {eur(aides.total)}</b>
+            </div>
+            <div style={{ color: "#475569" }}>
+              Coût net estimatif<br />
+              <b>{eur(coutApresAides)}</b>
+            </div>
+          </div>
+        </Card>
+      </StepWrap>,
+
+      // 8) Mensualité réelle (après aides)
+      <StepWrap key="s8">
+        {badgesTop}
+        <Title kicker="Mensualité" title="Votre mensualité réelle" sub="Après déduction des aides." />
+        <Card tone="green">
+          <div style={{ display: "grid", gap: 10, justifyItems: "center", textAlign: "center" }}>
+            <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Mensualité de financement (aides déduites)</div>
+            <div style={{ fontSize: 56, fontWeight: 980, color: "#14532d" }}>{eur(mensualite)}</div>
+            <div style={{ fontWeight: 900, color: "#14532d" }}>/mois</div>
+            <div style={{ fontSize: 12, color: "#475569" }}>sur {DUREE_MOIS} mois ({formatDurationMonths(DUREE_MOIS)})</div>
+          </div>
+        </Card>
+
+        <Card tone="blue">
+          <div style={{ fontWeight: 950, color: "#1e3a8a" }}>
+            Amorti estimé : <b>{amortTxt}</b>
+          </div>
+          <div style={{ marginTop: 8, color: "#475569" }}>
+            Basé sur {savingsPct}% d’économies estimées (modifiable à l’enregistrement).
+          </div>
+          <div style={{ marginTop: 12, display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" as any }}>
+            <div style={{ color: "#475569" }}>
+              Avant aides : <b>{eur(mensualiteAvantAides)}</b>
+            </div>
+            <div style={{ color: "#475569" }}>
+              Après aides : <b>{eur(mensualite)}</b>
+            </div>
+          </div>
+        </Card>
+      </StepWrap>,
+
+      // 9) Report 6 mois
+      <StepWrap key="s9">
+        {badgesTop}
+        <Title kicker="Offre" title="Vos 6 premiers mois : le Report" sub="0€ de mensualité pendant 6 mois (crédit)." />
+        <Card tone="green">
+          <div style={{ fontWeight: 950, color: "#14532d" }}>Comment ça fonctionne ?</div>
+          <div style={{ marginTop: 8, color: "#475569", lineHeight: 1.5 }}>
+            Pendant les <b>{REPORT_MOIS} premiers mois</b> suivant l’installation, vous ne payez <b>aucune mensualité</b> de crédit.
+          </div>
+
+          <div style={{ marginTop: 12, display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr 1fr" as any }}>
+            <Card tone="neutral">
+              <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Crédit</div>
+              <div style={{ fontSize: 26, fontWeight: 980 }}>0 €</div>
+              <div style={{ fontSize: 12, color: "#475569" }}>pendant 6 mois</div>
+            </Card>
+            <Card tone="neutral">
+              <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Énergie restante</div>
+              <div style={{ fontSize: 26, fontWeight: 980 }}>{eur(restePendantReport)}</div>
+              <div style={{ fontSize: 12, color: "#475569" }}>estimation</div>
+            </Card>
+            <Card tone="neutral">
+              <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Total / mois</div>
+              <div style={{ fontSize: 26, fontWeight: 980 }}>{eur(restePendantReport)}</div>
+              <div style={{ fontSize: 12, color: "#475569" }}>pendant le report</div>
+            </Card>
+          </div>
+        </Card>
+
+        <Card tone="orange">
+          <div style={{ fontWeight: 950, color: "#7a4a00" }}>Votre “cagnotte” d’économies</div>
+          <div style={{ marginTop: 8, color: "#475569", lineHeight: 1.5 }}>
+            Dès l’installation, vous commencez à économiser. Pendant le report, ces économies s’accumulent.
+          </div>
+
+          <div style={{ marginTop: 12, display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr 1fr" as any }}>
+            <Card tone="neutral">
+              <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Économie mensuelle estimée</div>
+              <div style={{ fontSize: 28, fontWeight: 980 }}>{eur(economieMensuelleEstimee)}</div>
+            </Card>
+            <Card tone="neutral">
+              <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>x {REPORT_MOIS} mois</div>
+              <div style={{ fontSize: 28, fontWeight: 980 }}>× {REPORT_MOIS}</div>
+            </Card>
+            <Card tone="neutral">
+              <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Cagnotte</div>
+              <div style={{ fontSize: 28, fontWeight: 980 }}>{eur(cagnotte)}</div>
+            </Card>
+          </div>
+
+          <div style={{ marginTop: 10, fontSize: 12, color: "#475569" }}>
+            Première mensualité au mois {REPORT_MOIS + 1} : <b>{eur(mensualite)}</b>
+          </div>
+        </Card>
+      </StepWrap>,
+
+      // 10) Nouvelle facture (simplifiée)
+      <StepWrap key="s10">
+        {badgesTop}
+        <Title kicker="Impact" title="Votre nouvelle facture" sub="Ce qui change concrètement (illustration)." />
+        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" as any }}>
+          <Card tone="red">
+            <div style={{ fontWeight: 950, color: "#7f1d1d" }}>AVANT</div>
+            <div style={{ fontSize: 44, fontWeight: 980, marginTop: 6 }}>{eur(depenseMensuelle)}</div>
+            <div style={{ color: "#475569" }}>/mois énergie</div>
+          </Card>
+          <Card tone="green">
+            <div style={{ fontWeight: 950, color: "#14532d" }}>APRÈS</div>
+            <div style={{ fontSize: 44, fontWeight: 980, marginTop: 6 }}>
+              {eur(Math.max(0, depenseMensuelle - economieMensuelleEstimee))}
+            </div>
+            <div style={{ color: "#475569" }}>/mois énergie (est.)</div>
+          </Card>
+        </div>
+
+        <Card tone="neutral">
+          <div style={{ fontWeight: 950 }}>Comment ça marche ?</div>
+          <div style={{ marginTop: 10, color: "#475569", lineHeight: 1.5 }}>
+            ✅ Système plus performant · ✅ Régulation moderne · ✅ Meilleure stabilité de consommation (selon usage).
+          </div>
+        </Card>
+
+        <Card tone="green">
+          <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Vous économisez chaque année (est.)</div>
+          <div style={{ fontSize: 40, fontWeight: 980, marginTop: 6 }}>{eur(economieMensuelleEstimee * 12)}</div>
+        </Card>
+      </StepWrap>,
+
+      // 11) “Transfert de charge” (budget global)
+      <StepWrap key="s11">
+        {badgesTop}
+        <Title kicker="Principe" title="Le transfert de charge" sub="Une partie de ce que vous payiez en énergie passe en financement." />
+        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" as any }}>
+          <Card tone="red">
+            <div style={{ fontWeight: 950, color: "#7f1d1d" }}>SANS travaux</div>
+            <div style={{ marginTop: 10, color: "#475569" }}>Énergie</div>
+            <div style={{ fontSize: 40, fontWeight: 980 }}>{eur(depenseMensuelle)}</div>
+            <div style={{ fontSize: 12, color: "#475569" }}>/mois</div>
+          </Card>
+
+          <Card tone="green">
+            <div style={{ fontWeight: 950, color: "#14532d" }}>AVEC PAC</div>
+            <div style={{ marginTop: 10, color: "#475569" }}>Crédit + énergie (est.)</div>
+            <div style={{ fontSize: 40, fontWeight: 980 }}>
+              {eur(mensualite + Math.max(0, depenseMensuelle - economieMensuelleEstimee))}
+            </div>
+            <div style={{ fontSize: 12, color: "#475569" }}>/mois</div>
+          </Card>
+        </div>
+
+        <Card tone="blue">
+          <div style={{ fontWeight: 950, color: "#1e3a8a" }}>
+            Objectif : budget mensuel maîtrisé
+          </div>
+          <div style={{ marginTop: 8, color: "#475569", lineHeight: 1.5 }}>
+            Vous remplacez une dépense “perdue” (énergie) par une dépense qui finance votre amélioration (travaux).
+          </div>
+        </Card>
+      </StepWrap>,
+
+      // 12) Comparaison 25 ans (illustration)
+      <StepWrap key="s12">
+        {badgesTop}
+        <Title kicker="Projection" title="Comparaison sur 25 ans" sub="Illustration : sans travaux vs avec travaux." />
+        <Card tone="neutral">
+          <div style={{ display: "grid", gap: 12, justifyItems: "center", textAlign: "center" }}>
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" as any, width: "100%" }}>
+              <Card tone="red">
+                <div style={{ fontWeight: 950, color: "#7f1d1d" }}>SANS PAC</div>
+                <div style={{ fontSize: 34, fontWeight: 980, marginTop: 6 }}>{eur(depenseMensuelle * 12 * 25)}</div>
+                <div style={{ fontSize: 12, color: "#475569" }}>Énergie sur 25 ans (base actuelle)</div>
+              </Card>
+              <Card tone="green">
+                <div style={{ fontWeight: 950, color: "#14532d" }}>AVEC PAC</div>
+                <div style={{ fontSize: 34, fontWeight: 980, marginTop: 6 }}>
+                  {eur((mensualite * 12 * 15) + (Math.max(0, depenseMensuelle - economieMensuelleEstimee) * 12 * 25))}
+                </div>
+                <div style={{ fontSize: 12, color: "#475569" }}>Crédit (15 ans) + énergie (25 ans)</div>
+              </Card>
+            </div>
+
+            <Card tone="green">
+              <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>Économies totales (illustration)</div>
+              <div style={{ fontSize: 40, fontWeight: 980, marginTop: 6 }}>
+                {eur(Math.max(0, depenseMensuelle * 12 * 25 - ((mensualite * 12 * 15) + (Math.max(0, depenseMensuelle - economieMensuelleEstimee) * 12 * 25))))}
+              </div>
+            </Card>
+
+            <div style={{ fontSize: 12, color: "#475569" }}>
+              *Projection illustrative (but pédagogique). Les résultats varient selon usage, isolation, météo, prix énergie, etc.
+            </div>
+          </div>
+        </Card>
+      </StepWrap>,
+
+      // 13) Avantages
+      <StepWrap key="s13">
+        {badgesTop}
+        <Title kicker="Bénéfices" title="Tous les avantages" sub="Confort, économies, modernisation." />
+        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" as any }}>
+          <Card tone="green">
+            <div style={{ fontWeight: 950 }}>Économies immédiates</div>
+            <div style={{ marginTop: 6, color: "#475569" }}>{eur(economieMensuelleEstimee * 12)}/an (est.)</div>
+          </Card>
+          <Card tone="blue">
+            <div style={{ fontWeight: 950 }}>Protection hausse</div>
+            <div style={{ marginTop: 6, color: "#475569" }}>Moins dépendant des hausses fortes.</div>
+          </Card>
+          <Card tone="orange">
+            <div style={{ fontWeight: 950 }}>Retour sur investissement</div>
+            <div style={{ marginTop: 6, color: "#475569" }}>Amorti : {amortTxt}</div>
+          </Card>
+          <Card tone="neutral">
+            <div style={{ fontWeight: 950 }}>Énergie plus propre</div>
+            <div style={{ marginTop: 6, color: "#475569" }}>Réduction de l’empreinte (selon usage).</div>
+          </Card>
+        </div>
+      </StepWrap>,
+
+      // 14) Éligibilité
+      <StepWrap key="s14">
+        {badgesTop}
+        <Title kicker="Validation" title="Vérification d’éligibilité" sub="Vérification des critères techniques et administratifs." />
+        <Card tone="blue">
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ fontWeight: 980, fontSize: 18 }}>Points forts de votre projet</div>
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" as any }}>
+              <Card tone="neutral">
+                <div style={{ color: "#475569", fontSize: 12, fontWeight: 900 }}>Installation</div>
+                <div style={{ fontWeight: 980 }}>Pack {packRecommande} kW</div>
+                <div style={{ color: "#475569", fontSize: 12, marginTop: 4 }}>{systemeReco}</div>
+              </Card>
+              <Card tone="neutral">
+                <div style={{ color: "#475569", fontSize: 12, fontWeight: 900 }}>Retour sur investissement</div>
+                <div style={{ fontWeight: 980 }}>{amortTxt}</div>
+                <div style={{ color: "#475569", fontSize: 12, marginTop: 4 }}>Puis économies nettes</div>
+              </Card>
+              <Card tone="neutral">
+                <div style={{ color: "#475569", fontSize: 12, fontWeight: 900 }}>Économies 1ère année</div>
+                <div style={{ fontWeight: 980 }}>{eur(economieMensuelleEstimee * 12)}</div>
+                <div style={{ color: "#475569", fontSize: 12, marginTop: 4 }}>estimation</div>
+              </Card>
+              <Card tone="neutral">
+                <div style={{ color: "#475569", fontSize: 12, fontWeight: 900 }}>Aides</div>
+                <div style={{ fontWeight: 980 }}>{eur(aides.total)}</div>
+                <div style={{ color: "#475569", fontSize: 12, marginTop: 4 }}>CEE + MPR</div>
+              </Card>
+            </div>
+
+            <Card tone="green">
+              ✅ Logement compatible (à confirmer après visite technique)
+            </Card>
+          </div>
+        </Card>
+      </StepWrap>,
+
+      // 15) Résumé final
+      <StepWrap key="s15">
+        {badgesTop}
+        <Title kicker="Résumé" title="En résumé" sub="Recommandation + financement + aides." />
+        <Card tone="neutral">
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" as any }}>
+              <Card tone="green">
+                <div style={{ color: "#475569", fontSize: 12, fontWeight: 900 }}>Votre installation</div>
+                <div style={{ fontSize: 34, fontWeight: 980, marginTop: 6 }}>{packRecommande} kW</div>
+                <div style={{ fontWeight: 950 }}>{systemeReco}</div>
+              </Card>
+              <Card tone="blue">
+                <div style={{ color: "#475569", fontSize: 12, fontWeight: 900 }}>Mensualité (après aides)</div>
+                <div style={{ fontSize: 34, fontWeight: 980, marginTop: 6 }}>{eur(mensualite)}/mois</div>
+                <div style={{ color: "#475569", marginTop: 6 }}>Report : 0€ pendant {REPORT_MOIS} mois</div>
+              </Card>
+            </div>
+
+            <Card tone="orange">
+              <div style={{ color: "#475569", fontSize: 12, fontWeight: 900 }}>Aides totales estimées</div>
+              <div style={{ fontSize: 40, fontWeight: 980, marginTop: 6 }}>{eur(aides.total)}</div>
+            </Card>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <Badge tone="neutral">Client : {clientNom || "—"}</Badge>
+              <Badge tone="neutral">Adresse : {clientAdresse || "—"}</Badge>
+              <Badge tone="neutral">Surface : {surface} m²</Badge>
+              {remplacementComplet ? <Badge tone="green">Remplacement complet</Badge> : <Badge tone="neutral">—</Badge>}
+            </div>
+          </div>
+        </Card>
+
+        <Card tone="green">
+          <div style={{ fontWeight: 950, color: "#14532d" }}>Prêt à passer à l’action ?</div>
+          <div style={{ marginTop: 8, color: "#475569" }}>
+            Nous finalisons la visite technique, puis nous montons le dossier d’aides et de financement.
+          </div>
+        </Card>
+      </StepWrap>,
+    ];
+  }, [
+    amortissementMois,
+    aides,
+    clientAdresse,
+    clientNom,
+    coutApresAides,
+    coutTTC,
+    depenseMensuelle,
+    economieMensuelleEstimee,
+    emplacementStyle,
+    emetteurs,
+    formatDurationMonths,
+    mensualite,
+    mensualiteAvantAides,
+    packRecommande,
+    prixCalculeTTC,
+    remplacementComplet,
+    savingsPct,
+    surface,
+    systemeReco,
+    typeRadiateurs,
+  ]);
+
+  // NOTE: petite astuce TypeScript (évite warning)
+  function emplacementStyle() {
+    return null;
+  }
+
+  // Navigation slides
+  const TOTAL = slides.length;
+  const [step, setStep] = useState(0);
+  const canPrev = step > 0;
+  const canNext = step < TOTAL - 1;
+
+  const goPrev = () => canPrev && setStep((s) => s - 1);
+  const goNext = () => canNext && setStep((s) => s + 1);
+
+  // Style général
+  const pageBg =
+    "radial-gradient(1200px 600px at 15% 10%, rgba(245,158,11,.16), transparent 60%)," +
+    "radial-gradient(900px 520px at 85% 20%, rgba(37,99,235,.14), transparent 55%)," +
+    "radial-gradient(900px 520px at 70% 85%, rgba(34,197,94,.12), transparent 55%)," +
+    "linear-gradient(180deg, rgba(248,250,252,1), rgba(241,245,249,1))";
+
+  const containerStyle: React.CSSProperties = { minHeight: "100vh", padding: 22, background: pageBg };
+
+  const shellStyle: React.CSSProperties = {
+    maxWidth: 980,
+    margin: "0 auto",
+    borderRadius: 24,
+    border: "1px solid rgba(15,23,42,.10)",
+    background: "rgba(255,255,255,.62)",
+    backdropFilter: "blur(10px)",
+    boxShadow: "0 30px 80px rgba(2,6,23,.12)",
+    overflow: "hidden",
+  };
+
+  const headerStyle: React.CSSProperties = {
+    padding: "18px 18px 10px",
+    borderBottom: "1px solid rgba(15,23,42,.08)",
+    background:
+      "linear-gradient(90deg, rgba(245,158,11,.10), rgba(37,99,235,.08), rgba(34,197,94,.08))",
+  };
+
+  const footerStyle: React.CSSProperties = {
+    padding: 16,
+    borderTop: "1px solid rgba(15,23,42,.08)",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap",
+    background: "rgba(255,255,255,.72)",
+  };
+
+  const btnBase: React.CSSProperties = {
+    padding: "10px 14px",
+    borderRadius: 14,
+    border: "1px solid rgba(15,23,42,.14)",
+    background: "rgba(255,255,255,.9)",
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: 14,
+  };
+
+  const btnPrimary: React.CSSProperties = {
+    ...btnBase,
+    border: "1px solid rgba(15,23,42,.08)",
+    background: "linear-gradient(90deg,#0f172a,#111827)",
+    color: "white",
+  };
+
+  // -----------------------------
+  // UI “Enregistrement”
+  // -----------------------------
+  const Enregistrement = (
+    <div style={{ padding: 18 }}>
+      <div style={{ display: "grid", gap: 12 }}>
+        <Title
+          title="Enregistrement client — Pompe à chaleur"
+          sub="Saisissez les informations, puis cliquez sur “Générer la simulation”."
+        />
+
+        <Card tone="blue">
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" as any }}>
+              <div>
+                <Label>Nom / Prénom</Label>
+                <Input value={clientNom} onChange={setClientNom} placeholder="Ex : M. Jean Dupont" />
+              </div>
+              <div>
+                <Label>Adresse du chantier</Label>
+                <Input value={clientAdresse} onChange={setClientAdresse} placeholder="Ex : 12 rue …, 75000 Paris" />
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr 1fr" as any }}>
+              <div>
+                <Label>Surface (m²)</Label>
+                <Input
+                  value={surface}
+                  onChange={(v) => setSurface(clamp(parseInt(v || "0", 10) || 0, 20, 500))}
+                  type="number"
+                />
+              </div>
+              <div>
+                <Label>Chauffage actuel</Label>
+                <Select value={chauffage} onChange={(v) => setChauffage(v as Chauffage)} options={["Gaz", "Fioul", "Électricité", "Granulés"]} />
+              </div>
+              <div>
+                <Label>Profil aides (MPR)</Label>
+                <Select value={profilAides} onChange={(v) => setProfilAides(v as ProfilAides)} options={["Très modestes", "Modestes", "Violet", "Classique"]} />
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr 1fr" as any }}>
+              <div>
+                <Label>Alimentation électrique</Label>
+                <Select value={alimentation} onChange={(v) => setAlimentation(v as Alimentation)} options={["Monophasé", "Triphasé"]} />
+              </div>
+              <div>
+                <Label>Émetteurs</Label>
+                <Select value={emetteurs} onChange={(v) => setEmetteurs(v as Emetteurs)} options={["Radiateurs", "Plancher chauffant"]} />
+              </div>
+              <div>
+                <Label>Type radiateurs</Label>
+                <Select value={typeRadiateurs} onChange={(v) => setTypeRadiateurs(v as TypeRadiateurs)} options={["Fonte", "Aluminium", "Inconnu"]} />
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr 1fr" as any }}>
+              <div>
+                <Label>Dépense énergie (mensuel/annuel)</Label>
+                <Select value={depenseFreq} onChange={(v) => setDepenseFreq(v as Frequence)} options={["€/mois", "€/an"]} />
+              </div>
+              <div>
+                <Label>Montant</Label>
+                <Input
+                  value={depenseMontant}
+                  onChange={(v) => setDepenseMontant(clamp(parseInt(v || "0", 10) || 0, 0, 99999))}
+                  type="number"
+                />
+              </div>
+              <div>
+                <Label>% économies estimées (pour amortissement)</Label>
+                <Input value={savingsPct} onChange={(v) => setSavingsPct(clamp(parseInt(v || "0", 10) || 0, 0, 80))} type="number" />
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={remplacementComplet}
+                  onChange={(e) => setRemplacementComplet(e.target.checked)}
+                />
+                <span style={{ fontWeight: 900, color: "#0f172a" }}>Remplacement complet</span>
+              </label>
+
+              <Badge tone="green">Pack recommandé : {packRecommande} kW</Badge>
+              <Badge tone="orange">Prix base : {eur(PRIX_BASE_TTC)}</Badge>
+              <Badge tone="blue">Aides estimées : {eur(aides.total)}</Badge>
+            </div>
+
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" as any }}>
+              <Card tone="neutral">
+                <div style={{ fontWeight: 950 }}>Surcoûts intégrés (invisibles client)</div>
+                <div style={{ marginTop: 8, color: "#475569", fontSize: 13, lineHeight: 1.5 }}>
+                  • Triphasé : +500€ TTC<br />
+                  • Plancher chauffant : +1000€ TTC
+                </div>
+                <div style={{ marginTop: 10, fontWeight: 950 }}>Total surcoûts : {eur(surchargeInvisible)}</div>
+              </Card>
+
+              <Card tone="green">
+                <div style={{ fontWeight: 950, color: "#14532d" }}>Mensualité (après aides)</div>
+                <div style={{ fontSize: 34, fontWeight: 980, marginTop: 6 }}>{eur(mensualite)}</div>
+                <div style={{ color: "#475569" }}>/mois · {DUREE_MOIS} mois · report 6 mois</div>
+              </Card>
+            </div>
+
+            <button onClick={() => setMode("simulation")} style={btnPrimary}>
+              Générer la simulation →
+            </button>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+
+  // -----------------------------
+  // UI “Simulation”
+  // -----------------------------
+  const Simulation = (
+    <>
+      <div style={headerStyle}>
+        <div style={{ display: "grid", gap: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 12,
+                  background: "linear-gradient(135deg,#f59e0b,#2563eb,#22c55e)",
+                  boxShadow: "0 12px 30px rgba(2,6,23,.12)",
+                }}
+              />
+              <div style={{ display: "grid" }}>
+                <div style={{ fontWeight: 980, color: "#0f172a" }}>{BRAND.name}</div>
+                <div style={{ fontSize: 12, color: "#475569", fontWeight: 900 }}>
+                  Simulation — Pompe à chaleur
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <Badge tone="neutral">SIRET {BRAND.siret}</Badge>
+              <Badge tone="blue">{BRAND.phone}</Badge>
+              <Badge tone="green">{step + 1}/{TOTAL}</Badge>
+            </div>
+          </div>
+
+          <ProgressDots total={TOTAL} current={step} />
+        </div>
+      </div>
+
+      {slides[step]}
+
+      <div style={footerStyle}>
+        <button onClick={() => setMode("enregistrement")} style={btnBase}>
+          ← Retour enregistrement
+        </button>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={goPrev} disabled={!canPrev} style={{ ...btnBase, opacity: canPrev ? 1 : 0.45 }}>
+            ← Précédent
+          </button>
+
+          <button onClick={goNext} disabled={!canNext} style={{ ...btnPrimary, opacity: canNext ? 1 : 0.45 }}>
+            Suivant →
+          </button>
+        </div>
+      </div>
+    </>
+  );
+
+  return (
+    <div style={containerStyle}>
+      <div style={shellStyle}>
+        {mode === "enregistrement" ? Enregistrement : Simulation}
+      </div>
+    </div>
+  );
+}
