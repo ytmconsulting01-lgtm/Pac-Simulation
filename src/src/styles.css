@@ -1,0 +1,783 @@
+import { useMemo, useState } from "react";
+
+type PackId = 9 | 11 | 14 | 16;
+
+type ClientStudy = {
+  id: string;
+  createdAt: number;
+  clientName: string;
+  address: string;
+
+  surfaceM2: number;
+  chauffageActuel: "Gaz" | "Fioul" | "Electrique" | "Bois" | "Autre";
+  alimentation: "Monophasé" | "Triphasé";
+  emetteurs: "Radiateurs" | "Plancher chauffant" | "Mixte";
+
+  pack: PackId;
+
+  // Prix “pilotables” (comme tu dis)
+  prixInstallationTTC: number;         // “avant aides” affiché
+  mensualiteApresAides: number;        // “après aides”
+  dureeMois: number;                   // 180 par défaut (15 ans)
+  reportMois: number;                  // 6 mois par défaut
+
+  // Aides / surcoûts (invisibles client si tu veux, mais là on les stocke)
+  aidesTotal: number;
+  surcoutPlancherInvisible: number;    // 1000 (si plancher chauffant)
+  aideRemplacementComplet: boolean;
+
+  // Quelques chiffres “simulation” simples (tu pourras les raffiner ensuite)
+  factureActuelleMensuelle: number;    // ex 206
+  factureApresMensuelle: number;       // ex 41
+  economieMensuelle: number;           // calculé
+};
+
+const LS_KEY = "pac-simu:studies:v1";
+
+function euro(n: number) {
+  return new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(n);
+}
+
+function uid() {
+  return Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
+}
+
+function loadStudies(): ClientStudy[] {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as ClientStudy[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveStudies(studies: ClientStudy[]) {
+  localStorage.setItem(LS_KEY, JSON.stringify(studies));
+}
+
+function defaultStudy(): ClientStudy {
+  // On met des valeurs “proches” de tes screenshots pour démarrer
+  const factureActuelleMensuelle = 206;
+  const factureApresMensuelle = 41;
+
+  return {
+    id: uid(),
+    createdAt: Date.now(),
+    clientName: "",
+    address: "",
+
+    surfaceM2: 100,
+    chauffageActuel: "Gaz",
+    alimentation: "Monophasé",
+    emetteurs: "Radiateurs",
+
+    pack: 11,
+
+    // IMPORTANT : le prix reste le même peu importe la PAC (comme tu as demandé)
+    prixInstallationTTC: 25901,
+    mensualiteApresAides: 168.76,
+    dureeMois: 180,
+    reportMois: 6,
+
+    aidesTotal: 4797,
+    surcoutPlancherInvisible: 0,
+    aideRemplacementComplet: true,
+
+    factureActuelleMensuelle,
+    factureApresMensuelle,
+    economieMensuelle: factureActuelleMensuelle - factureApresMensuelle
+  };
+}
+
+function computeDerived(s: ClientStudy): ClientStudy {
+  const factureActuelleMensuelle = Math.max(0, s.factureActuelleMensuelle);
+  const factureApresMensuelle = Math.max(0, s.factureApresMensuelle);
+  const economieMensuelle = Math.max(0, factureActuelleMensuelle - factureApresMensuelle);
+
+  const surcoutPlancherInvisible =
+    s.emetteurs === "Plancher chauffant" || s.emetteurs === "Mixte"
+      ? 1000
+      : 0;
+
+  return {
+    ...s,
+    factureActuelleMensuelle,
+    factureApresMensuelle,
+    economieMensuelle,
+    surcoutPlancherInvisible
+  };
+}
+
+/**
+ * Paliers pack (tu as demandé précisément : 9 / 11 / 14 / 16)
+ * Ici c’est juste une “présentation” : tu peux changer les libellés quand tu veux.
+ */
+const PACKS: Array<{
+  id: PackId;
+  title: string;
+  subtitle: string;
+  badge?: "Recommandé";
+}> = [
+  { id: 9, title: "Pack 9", subtitle: "Entrée de gamme optimisée" },
+  { id: 11, title: "Pack 11", subtitle: "Équilibre confort / budget", badge: "Recommandé" },
+  { id: 14, title: "Pack 14", subtitle: "Performance renforcée" },
+  { id: 16, title: "Pack 16", subtitle: "Premium / tranquillité max" }
+];
+
+type Screen = "dashboard" | "wizard";
+
+export default function App() {
+  const [screen, setScreen] = useState<Screen>("dashboard");
+  const [studies, setStudies] = useState<ClientStudy[]>(() => loadStudies().map(computeDerived));
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [step, setStep] = useState<number>(0);
+
+  const active = useMemo(() => {
+    const s = studies.find((x) => x.id === activeId);
+    return s ?? null;
+  }, [studies, activeId]);
+
+  function persist(next: ClientStudy[]) {
+    setStudies(next);
+    saveStudies(next);
+  }
+
+  function startNew() {
+    const s = computeDerived(defaultStudy());
+    const next = [s, ...studies];
+    persist(next);
+    setActiveId(s.id);
+    setStep(0);
+    setScreen("wizard");
+  }
+
+  function openStudy(id: string) {
+    setActiveId(id);
+    setStep(0);
+    setScreen("wizard");
+  }
+
+  function deleteStudy(id: string) {
+    const next = studies.filter((x) => x.id !== id);
+    persist(next);
+    if (activeId === id) setActiveId(null);
+  }
+
+  function updateActive(patch: Partial<ClientStudy>) {
+    if (!activeId) return;
+    const next = studies.map((s) => {
+      if (s.id !== activeId) return s;
+      return computeDerived({ ...s, ...patch });
+    });
+    persist(next);
+  }
+
+  const stepsTotal = 8; // “slides” principales (tu pourras étendre à 15-16 après)
+
+  const canPrev = step > 0;
+  const canNext = step < stepsTotal - 1;
+
+  function goPrev() {
+    if (!canPrev) return;
+    setStep((v) => Math.max(0, v - 1));
+  }
+  function goNext() {
+    if (!canNext) return;
+    setStep((v) => Math.min(stepsTotal - 1, v + 1));
+  }
+
+  return (
+    <div className="container">
+      <div className="topbar">
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div className="brand">Pack Simulation</div>
+          <div className="badge">0€ • Netlify</div>
+        </div>
+
+        {screen === "wizard" ? (
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button className="btn btnGhost" onClick={() => setScreen("dashboard")}>
+              ← Retour clients
+            </button>
+          </div>
+        ) : (
+          <button className="btn btnPrimary" onClick={startNew}>
+            + Nouvelle étude
+          </button>
+        )}
+      </div>
+
+      {screen === "dashboard" ? (
+        <Dashboard studies={studies} onOpen={openStudy} onDelete={deleteStudy} onNew={startNew} />
+      ) : (
+        <Wizard
+          study={active}
+          step={step}
+          stepsTotal={stepsTotal}
+          onPrev={goPrev}
+          onNext={goNext}
+          onUpdate={updateActive}
+        />
+      )}
+    </div>
+  );
+}
+
+function Dashboard(props: {
+  studies: ClientStudy[];
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+  onNew: () => void;
+}) {
+  const { studies, onOpen, onDelete, onNew } = props;
+
+  return (
+    <div className="row">
+      <div className="card cardPad">
+        <div style={{ fontWeight: 950, fontSize: 16 }}>Clients / Études</div>
+        <p className="small" style={{ marginTop: 6 }}>
+          Tu arrives ici en premier. Clique sur une étude ou lance une nouvelle.
+        </p>
+
+        <button className="btn btnPrimary" onClick={onNew} style={{ width: "100%", marginTop: 10 }}>
+          + Nouvelle étude
+        </button>
+
+        <hr className="sep" />
+
+        {studies.length === 0 ? (
+          <div className="small">Aucune étude pour le moment.</div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {studies.map((s) => (
+              <div key={s.id} className="listItem">
+                <div>
+                  <strong>{s.clientName?.trim() ? s.clientName : "Client (non renseigné)"}</strong>
+                  <span>{s.address?.trim() ? s.address : "Adresse (non renseignée)"}</span>
+                  <span>
+                    Pack {s.pack} • {euro(s.prixInstallationTTC)} • {euro(s.mensualiteApresAides)}/mois
+                  </span>
+                </div>
+
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="btn" onClick={() => onOpen(s.id)}>
+                    Ouvrir
+                  </button>
+                  <button className="btn btnDanger" onClick={() => onDelete(s.id)}>
+                    Suppr
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card cardPad">
+        <div style={{ fontWeight: 950, fontSize: 16 }}>Rappel du parcours</div>
+        <p className="small" style={{ marginTop: 6 }}>
+          ✅ Liste clients → ✅ Nouvelle étude → ✅ Saisie infos → ✅ Slides fluides (suivant / précédent) → ✅ Pack recommandé.
+        </p>
+
+        <div className="panel">
+          <div style={{ fontWeight: 900 }}>Ce que tu peux modifier pendant la simulation</div>
+          <ul className="small" style={{ marginTop: 8, lineHeight: 1.5 }}>
+            <li>Pack (9 / 11 / 14 / 16)</li>
+            <li>Prix installation TTC</li>
+            <li>Mensualité après aides</li>
+            <li>Durée (mois) et report (mois)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Wizard(props: {
+  study: ClientStudy | null;
+  step: number;
+  stepsTotal: number;
+  onPrev: () => void;
+  onNext: () => void;
+  onUpdate: (patch: Partial<ClientStudy>) => void;
+}) {
+  const { study, step, stepsTotal, onPrev, onNext, onUpdate } = props;
+
+  if (!study) {
+    return (
+      <div className="card cardPad">
+        <div style={{ fontWeight: 950 }}>Aucune étude sélectionnée</div>
+        <p className="small">Retourne sur “Clients / Études” et ouvre une étude.</p>
+      </div>
+    );
+  }
+
+  const dots = Array.from({ length: stepsTotal }).map((_, i) => (
+    <div key={i} className={"dot" + (i === step ? " active" : "")} />
+  ));
+
+  return (
+    <div className="card cardPad">
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontWeight: 950, fontSize: 14 }}>Étude</div>
+          <div className="small">
+            {study.clientName?.trim() ? study.clientName : "Client"} • Pack {study.pack}
+          </div>
+        </div>
+
+        <div className="kpiGrid" style={{ minWidth: 320 }}>
+          <div className="kpi">
+            <div className="label">Prix TTC</div>
+            <div className="value">{euro(study.prixInstallationTTC)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Mensualité</div>
+            <div className="value">{euro(study.mensualiteApresAides)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Avant</div>
+            <div className="value">{euro(study.factureActuelleMensuelle)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Après</div>
+            <div className="value">{euro(study.factureApresMensuelle)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="progress">{dots}</div>
+
+      <hr className="sep" />
+
+      {step === 0 && <Slide0 study={study} onUpdate={onUpdate} />}
+      {step === 1 && <Slide1Packs study={study} onUpdate={onUpdate} />}
+      {step === 2 && <Slide2Invest study={study} onUpdate={onUpdate} />}
+      {step === 3 && <Slide3Aides study={study} />}
+      {step === 4 && <Slide4Mensualite study={study} />}
+      {step === 5 && <Slide5Report study={study} />}
+      {step === 6 && <Slide6Facture study={study} />}
+      {step === 7 && <Slide7Resume study={study} />}
+
+      <div className="footerNav">
+        <button className="btn" onClick={onPrev} disabled={step === 0} style={{ opacity: step === 0 ? 0.45 : 1 }}>
+          ← Précédent
+        </button>
+        <button
+          className="btn btnPrimary"
+          onClick={onNext}
+          disabled={step === stepsTotal - 1}
+          style={{ opacity: step === stepsTotal - 1 ? 0.45 : 1 }}
+        >
+          Suivant →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Slide0(props: { study: ClientStudy; onUpdate: (p: Partial<ClientStudy>) => void }) {
+  const { study, onUpdate } = props;
+
+  return (
+    <>
+      <div className="slideTitle">Informations logement</div>
+      <p className="slideSub">Étape 1 — Saisie rapide (comme Solar Studio)</p>
+
+      <div className="panel">
+        <div className="formGrid">
+          <div className="field">
+            <label>Nom client</label>
+            <input
+              value={study.clientName}
+              placeholder="Ex : Mme. Dupont"
+              onChange={(e) => onUpdate({ clientName: e.target.value })}
+            />
+          </div>
+
+          <div className="field">
+            <label>Adresse du chantier</label>
+            <input
+              value={study.address}
+              placeholder="Ex : 12 rue ... 75000 Paris"
+              onChange={(e) => onUpdate({ address: e.target.value })}
+            />
+          </div>
+
+          <div className="field">
+            <label>Superficie (m²)</label>
+            <input
+              type="number"
+              value={study.surfaceM2}
+              onChange={(e) => onUpdate({ surfaceM2: Number(e.target.value || 0) })}
+            />
+          </div>
+
+          <div className="field">
+            <label>Chauffage actuel</label>
+            <select
+              value={study.chauffageActuel}
+              onChange={(e) => onUpdate({ chauffageActuel: e.target.value as ClientStudy["chauffageActuel"] })}
+            >
+              <option>Gaz</option>
+              <option>Fioul</option>
+              <option>Electrique</option>
+              <option>Bois</option>
+              <option>Autre</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>Alimentation</label>
+            <select
+              value={study.alimentation}
+              onChange={(e) => onUpdate({ alimentation: e.target.value as ClientStudy["alimentation"] })}
+            >
+              <option>Monophasé</option>
+              <option>Triphasé</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>Émetteurs</label>
+            <select
+              value={study.emetteurs}
+              onChange={(e) => onUpdate({ emetteurs: e.target.value as ClientStudy["emetteurs"] })}
+            >
+              <option>Radiateurs</option>
+              <option>Plancher chauffant</option>
+              <option>Mixte</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>Facture actuelle (€/mois)</label>
+            <input
+              type="number"
+              value={study.factureActuelleMensuelle}
+              onChange={(e) => onUpdate({ factureActuelleMensuelle: Number(e.target.value || 0) })}
+            />
+          </div>
+
+          <div className="field">
+            <label>Facture après (€/mois)</label>
+            <input
+              type="number"
+              value={study.factureApresMensuelle}
+              onChange={(e) => onUpdate({ factureApresMensuelle: Number(e.target.value || 0) })}
+            />
+          </div>
+        </div>
+
+        <hr className="sep" />
+
+        <div className="small">
+          Surcoût invisible plancher chauffant (si émetteurs = plancher/mixte) :{" "}
+          <strong>{euro(study.surcoutPlancherInvisible)}</strong> (1000€)
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Slide1Packs(props: { study: ClientStudy; onUpdate: (p: Partial<ClientStudy>) => void }) {
+  const { study, onUpdate } = props;
+
+  return (
+    <>
+      <div className="slideTitle">Pack recommandé</div>
+      <p className="slideSub">Choisis parmi 9 / 11 / 14 / 16</p>
+
+      <div className="packs">
+        {PACKS.map((p) => {
+          const selected = study.pack === p.id;
+          return (
+            <div
+              key={p.id}
+              className={"pack" + (selected ? " selected" : "")}
+              onClick={() => onUpdate({ pack: p.id })}
+              role="button"
+              tabIndex={0}
+            >
+              {p.badge ? <div className="ribbon">{p.badge}</div> : null}
+              <div className="name">{p.title}</div>
+              <div className="meta">{p.subtitle}</div>
+              <div className="meta" style={{ marginTop: 10 }}>
+                ✅ Prix identique (peu importe la PAC)
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="panel" style={{ marginTop: 12 }}>
+        <div style={{ fontWeight: 900 }}>Pack sélectionné : Pack {study.pack}</div>
+        <div className="small" style={{ marginTop: 6 }}>
+          Tu peux changer à tout moment pendant la simulation.
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Slide2Invest(props: { study: ClientStudy; onUpdate: (p: Partial<ClientStudy>) => void }) {
+  const { study, onUpdate } = props;
+
+  return (
+    <>
+      <div className="slideTitle">Votre investissement</div>
+      <p className="slideSub">Tu peux modifier le prix et la mensualité (vente + cher / - cher)</p>
+
+      <div className="panel">
+        <div className="formGrid">
+          <div className="field">
+            <label>Prix installation (avant aides) — TTC</label>
+            <input
+              type="number"
+              value={study.prixInstallationTTC}
+              onChange={(e) => onUpdate({ prixInstallationTTC: Number(e.target.value || 0) })}
+            />
+          </div>
+
+          <div className="field">
+            <label>Mensualité (après aides) — €/mois</label>
+            <input
+              type="number"
+              step="0.01"
+              value={study.mensualiteApresAides}
+              onChange={(e) => onUpdate({ mensualiteApresAides: Number(e.target.value || 0) })}
+            />
+          </div>
+
+          <div className="field">
+            <label>Durée (mois)</label>
+            <input
+              type="number"
+              value={study.dureeMois}
+              onChange={(e) => onUpdate({ dureeMois: Number(e.target.value || 0) })}
+            />
+          </div>
+
+          <div className="field">
+            <label>Report (mois)</label>
+            <input
+              type="number"
+              value={study.reportMois}
+              onChange={(e) => onUpdate({ reportMois: Number(e.target.value || 0) })}
+            />
+          </div>
+        </div>
+
+        <hr className="sep" />
+
+        <div className="small">
+          Note : surcoûts invisibles stockés (ex plancher = 1000€). Ici on les garde en interne mais on ne casse pas ton affichage client.
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Slide3Aides(props: { study: ClientStudy }) {
+  const { study } = props;
+
+  const coutNet = Math.max(0, study.prixInstallationTTC - study.aidesTotal);
+
+  return (
+    <>
+      <div className="slideTitle">Vos droits aux aides</div>
+      <p className="slideSub">Résumé simple (tu peux affiner ensuite)</p>
+
+      <div className="panel">
+        <div className="kpiGrid">
+          <div className="kpi">
+            <div className="label">Aides totales</div>
+            <div className="value">{euro(study.aidesTotal)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Prix TTC</div>
+            <div className="value">{euro(study.prixInstallationTTC)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Coût net</div>
+            <div className="value">{euro(coutNet)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Pack</div>
+            <div className="value">{study.pack}</div>
+          </div>
+        </div>
+
+        <hr className="sep" />
+
+        <div className="small">
+          Aide remplacement complet : <strong>{study.aideRemplacementComplet ? "Oui" : "Non"}</strong>
+          <br />
+          Surcoût plancher invisible : <strong>{euro(study.surcoutPlancherInvisible)}</strong>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Slide4Mensualite(props: { study: ClientStudy }) {
+  const { study } = props;
+
+  const amortiAnnees = 6.5; // comme ton exemple, fixe pour l’instant
+  const violet = 3500; // tu as demandé 3500 (pas 3400)
+
+  return (
+    <>
+      <div className="slideTitle">Votre mensualité réelle</div>
+      <p className="slideSub">Après déduction des aides</p>
+
+      <div className="panel">
+        <div className="kpiGrid">
+          <div className="kpi">
+            <div className="label">Mensualité</div>
+            <div className="value">{euro(study.mensualiteApresAides)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Durée</div>
+            <div className="value">{study.dureeMois} mois</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Amorti (indicatif)</div>
+            <div className="value">{amortiAnnees} ans</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Valeur violet</div>
+            <div className="value">{euro(violet)}</div>
+          </div>
+        </div>
+
+        <p className="small" style={{ marginTop: 10 }}>
+          (Violet = 3500€ comme demandé — utile si tu veux afficher un encart “bonus/option” plus tard.)
+        </p>
+      </div>
+    </>
+  );
+}
+
+function Slide5Report(props: { study: ClientStudy }) {
+  const { study } = props;
+
+  const cagnotte = Math.round(study.economieMensuelle * study.reportMois);
+
+  return (
+    <>
+      <div className="slideTitle">Vos {study.reportMois} premiers mois : le Report</div>
+      <p className="slideSub">0€ de mensualité pendant {study.reportMois} mois (si applicable)</p>
+
+      <div className="panel">
+        <div style={{ fontWeight: 900 }}>Pendant le report, vous payez uniquement :</div>
+        <div className="kpiGrid" style={{ marginTop: 10 }}>
+          <div className="kpi">
+            <div className="label">Électricité restante (€/mois)</div>
+            <div className="value">{euro(study.factureApresMensuelle)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Mensualité crédit</div>
+            <div className="value">{euro(0)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Total / mois</div>
+            <div className="value">{euro(study.factureApresMensuelle)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Cagnotte (estimée)</div>
+            <div className="value">{euro(cagnotte)}</div>
+          </div>
+        </div>
+
+        <p className="small" style={{ marginTop: 10 }}>
+          Cagnotte = économies mensuelles × mois de report (approx).
+        </p>
+      </div>
+    </>
+  );
+}
+
+function Slide6Facture(props: { study: ClientStudy }) {
+  const { study } = props;
+
+  const economieAn = Math.round(study.economieMensuelle * 12);
+
+  return (
+    <>
+      <div className="slideTitle">Votre nouvelle facture</div>
+      <p className="slideSub">Avant / Après (simple et fluide)</p>
+
+      <div className="panel">
+        <div className="kpiGrid">
+          <div className="kpi">
+            <div className="label">AVANT</div>
+            <div className="value">{euro(study.factureActuelleMensuelle)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">APRÈS</div>
+            <div className="value">{euro(study.factureApresMensuelle)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Économie / mois</div>
+            <div className="value">{euro(study.economieMensuelle)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Économie / an</div>
+            <div className="value">{euro(economieAn)}</div>
+          </div>
+        </div>
+
+        <p className="small" style={{ marginTop: 10 }}>
+          Tu peux ajuster “AVANT/APRÈS” à l’étape 1 si besoin.
+        </p>
+      </div>
+    </>
+  );
+}
+
+function Slide7Resume(props: { study: ClientStudy }) {
+  const { study } = props;
+
+  const economie25 = Math.round(study.economieMensuelle * 12 * 25);
+
+  return (
+    <>
+      <div className="slideTitle">En résumé</div>
+      <p className="slideSub">Synthèse client (pack + chiffres clés)</p>
+
+      <div className="panel">
+        <div className="kpiGrid">
+          <div className="kpi">
+            <div className="label">Pack</div>
+            <div className="value">{study.pack}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Prix TTC</div>
+            <div className="value">{euro(study.prixInstallationTTC)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Mensualité</div>
+            <div className="value">{euro(study.mensualiteApresAides)}</div>
+          </div>
+          <div className="kpi">
+            <div className="label">Économies (25 ans)</div>
+            <div className="value">{euro(economie25)}</div>
+          </div>
+        </div>
+
+        <hr className="sep" />
+
+        <div className="small">
+          Client : <strong>{study.clientName?.trim() ? study.clientName : "—"}</strong>
+          <br />
+          Adresse : <strong>{study.address?.trim() ? study.address : "—"}</strong>
+          <br />
+          Émetteurs : <strong>{study.emetteurs}</strong> • Chauffage actuel : <strong>{study.chauffageActuel}</strong>
+        </div>
+      </div>
+    </>
+  );
+}
