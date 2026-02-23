@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type ProfilAides = "Grand précaire" | "Modeste" | "Violet" | "Classique";
 type ChauffageActuel = "Gaz" | "Fioul" | "Électricité" | "Poêle à granulés" | "Autre";
